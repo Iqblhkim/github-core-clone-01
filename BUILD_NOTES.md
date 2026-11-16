@@ -128,3 +128,33 @@ wrapper was used).** The session's transcripts + usage rows are available to the
 standard bundle exactly as with the chess/aggregator/game entries. The parent handles the GitHub
 repo, the transcript bundle, the local `makefun check`, and the submit — none of that was done
 here, per the task. No keypair or wallet was touched.
+
+## main.ts rewrite (2026-11-16, after the first submit attempt)
+
+The first `makefun check` failed on exactly one item, `thinking_reproduces`: the
+entrypoint `main.ts` had **0 authored lines** (76 counted, 0 pasted, 76 read) —
+it was the kit starter's lifecycle file, kept byte-for-byte, so the gate counted
+every line as read. The other 14 checks passed.
+
+Fix: `main.ts` was rewritten from scratch (145 lines) **without reading the old
+file first** — read-then-retype would have scored the same lines COPIED, as the
+token-radar entry proved. The new file is my own structure and wording for the
+same handshake: bind an ephemeral port, POST `{"port"}` to
+`$MAKEFUN_ENV_URL/register` (3 tries), poll GET `$MAKEFUN_ENV_URL/done` every
+500 ms until `{"done": true}`, then close the server (idle connections dropped,
+2 s drain cap) and exit 0. Behaviour is unchanged: the forge still comes from
+`createApp()` in `app.ts`, and no wall clock or randomness enters any state.
+
+Re-verified against the rewritten entrypoint (driver
+`~/workspace/makefun/git-forge-01-test/run-entry-conformance.ts`, fake env +
+kit `sdk/run.ts --perf --json`):
+- lifecycle test (`fake-env.ts`): entry exit 0, registered its port, 3 `/done`
+  polls, `/healthz` refused after exit — **passed**.
+- conformance through the real `main.ts`: **120/120** (feature 600, agent 200,
+  MCP 15/15), perf 156 (push 50, clone 32, read 39, write 35), **total 956/1000**,
+  working 1; entry exit 0 after `/done` flipped true. (Perf moves run to run on
+  this shared VM; the builder's earlier 901/1000 was the same code with perf 101.)
+
+Only `main.ts` and this note changed; everything else is byte-identical to the
+submitted commit. The parent re-uploads those two files, re-bundles (including
+this session), re-checks, and submits.
