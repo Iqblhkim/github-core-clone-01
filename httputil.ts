@@ -10,20 +10,39 @@ export function newRequestId(): string {
   return `req-${Date.now().toString(36)}-${requestCounter.toString(36)}`;
 }
 
+export class BodyTooLargeError extends Error {
+  constructor() {
+    super('Request body too large');
+    this.name = 'BodyTooLargeError';
+  }
+}
+
 export function readBody(request: IncomingMessage, limitBytes = 8 * 1024 * 1024): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
+    let tooLarge = false;
+    // Once the limit is passed we stop buffering and drain the rest of the body instead of
+    // destroying the connection, so the caller can answer a clean 413 and the socket stays
+    // usable for keep-alive. The drain is capped so a never-ending body cannot stall us.
+    const drainCap = limitBytes + 64 * 1024 * 1024;
     request.on('data', (chunk: Buffer) => {
       total += chunk.length;
-      if (total > limitBytes) {
-        reject(new Error('request body too large'));
+      if (total > drainCap) {
+        reject(new BodyTooLargeError());
         request.destroy();
+        return;
+      }
+      if (total > limitBytes) {
+        tooLarge = true;
         return;
       }
       chunks.push(chunk);
     });
-    request.on('end', () => resolve(Buffer.concat(chunks)));
+    request.on('end', () => {
+      if (tooLarge) reject(new BodyTooLargeError());
+      else resolve(Buffer.concat(chunks));
+    });
     request.on('error', reject);
   });
 }

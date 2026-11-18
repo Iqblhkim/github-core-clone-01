@@ -158,3 +158,54 @@ kit `sdk/run.ts --perf --json`):
 Only `main.ts` and this note changed; everything else is byte-identical to the
 submitted commit. The parent re-uploads those two files, re-bundles (including
 this session), re-checks, and submits.
+
+## v2 — oversized-body 413 fix (2026-11-18, NOT pushed, NOT submitted)
+
+User order 11:09 WIB 18 Nov: "kalo belum jdi top trus aja sumbit" — keep improving and
+resubmitting until Top Rewards. The one provable improvement available was the single gap
+from the 17 Nov fuzz run (~90 cases, zero crashes/500s): a POST body over the 8 MB limit
+destroyed the connection instead of returning a clean HTTP 413 (the server survived).
+
+**Fix (2 files, +28/−5 lines).**
+- `httputil.ts` — `readBody()`: on passing the limit it no longer calls
+  `request.destroy()`. It stops buffering, drains (discards) the rest of the body, then
+  rejects with a new `BodyTooLargeError`. The drain is capped at limit + 64 MiB, past
+  which the request is destroyed (never-ending-body protection). A drained socket stays
+  usable for keep-alive, so the caller can answer a clean 413.
+- `app.ts` — the request handler's catch: `BodyTooLargeError` now answers
+  `413 {"message":"Request body too large"}` with the usual `x-github-request-id`
+  header, instead of falling through to the 500 branch. One place covers all four
+  surfaces (REST, GraphQL, MCP, git smart HTTP) because every `readBody` call
+  propagates to this catch. No other behaviour changed.
+
+**Repro (before fix, v1 @ 0520882).** 9 MB POST to `/api/v3/user/repos` → client
+`ECONNRESET`, no HTTP status; follow-up `/healthz` 200 (server alive, connection dead).
+
+**Fuzz (recreated suite `~/workspace/makefun/git-forge-01-test/fuzz-413.mjs`, 91 cases:
+REST malformed/traversal/auth/pagination, oversized bodies on all four surfaces,
+GraphQL malformed/nested/huge, MCP, git pkt-line garbage, 8 000-char URL, 100 KB header,
+50-request burst, liveness).**
+- v1 baseline (fix stashed): **86/91** — exactly the 5 oversized-body cases fail, all
+  `ECONNRESET` (REST 9 MB, GraphQL 9 MB, MCP 9 MB, git-receive-pack 9 MB, REST 8 MB+1).
+- v2 (fixed): **91/91, 0 failed, 0 crashes, 0 HTTP 500s**, run twice on fresh servers
+  (ports 41911, 37243). Post-413 follow-up requests on the same keep-alive agent succeed.
+- Note: a 100 KB header is still reset by Node's HTTP parser (16 KB `maxHeaderSize`
+  default) before our code runs — identical on v1 and v2, server stays alive; out of scope.
+
+**Kit conformance (fresh server, `sdk/run.ts --json`, run8): 120/120** — feature 600/600,
+agent 200/200, working 1 (perf not run, 0/200 by omission). No regressions.
+
+**Bundle/check.** v2 bundle = the 26 v1 build sessions + this v2 build session
+(`bd03455d-a9a0-4d0c-842c-e24c1b28d7ef`); usage rows = the v1 file
+(`muse-usage-forge-v2.jsonl`, 200 rows). Caveat: this subagent's own usage rows were
+not yet in the Muse database at bundle time (0 rows for its agent id — rows are written
+when the report message is delivered), so the v2 session ships without attached usage
+rows; if `check` flags that, the parent should re-run the usage query + bundle after
+this report lands. Local `makefun check` (18 Nov ~04:18 UTC, bundle
+`transcripts-forge-v2.tar.gz`, sha256
+`61888705e07874e85df4e3271abc3b06276ebde1ff62a691b36861c64df825b3`): **15 passed,
+0 failed, 6 skipped, 5 checked at submission** — thinking_reproduces 82.6% (2834/3430
+authored, 0 pasted), thinking_turns 1408, thinking_priced 78 usage records,
+thinking_revised graphql.ts 7 / main.ts 1, 27 sessions parsed. (Check reads the
+committed v1 snapshot; the uncommitted v2 changes are noted, not checked.)
+Committed locally only; push + submit are the parent's.

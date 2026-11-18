@@ -5,7 +5,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { handleInfoRefs, handleReceivePack, handleUploadPack } from './githttp.ts';
 import { handleGraphql } from './graphql.ts';
-import { errorJson, isAuthorized, newRequestId, readBody } from './httputil.ts';
+import { BodyTooLargeError, errorJson, isAuthorized, newRequestId, readBody } from './httputil.ts';
 import { handleMcp } from './mcp.ts';
 import { handleRest, type RestContext } from './rest.ts';
 import { Forge } from './store.ts';
@@ -89,7 +89,11 @@ export function createApp(): ReturnType<typeof createServer> {
         json404(response, requestId);
       } catch (err) {
         if (!response.headersSent) {
-          errorJson(response, 500, err instanceof Error ? err.message : 'Internal Server Error', { 'x-github-request-id': requestId });
+          if (err instanceof BodyTooLargeError) {
+            errorJson(response, 413, 'Request body too large', { 'x-github-request-id': requestId });
+          } else {
+            errorJson(response, 500, err instanceof Error ? err.message : 'Internal Server Error', { 'x-github-request-id': requestId });
+          }
         } else {
           response.end();
         }
